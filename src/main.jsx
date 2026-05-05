@@ -23,6 +23,7 @@ import {
 import './styles.css'
 
 const STORAGE_KEY = 'tw-invest-dashboard-portfolio'
+//const [marketStatus, setMarketStatus] = useState(null)
 
 const recommendations = [
   {
@@ -144,6 +145,17 @@ function money(value) {
 function App() {
   const [keyword, setKeyword] = useState('')
   const [importPreview, setImportPreview] = useState([])
+  const [marketStatus, setMarketStatus] = useState(null)
+  const [apiRecommendations, setApiRecommendations] = useState([])
+  const fetchRecommendations = () => {
+  fetch("http://127.0.0.1:8000/api/recommendations")
+    .then(res => res.json())
+    .then(data => {
+      if (data.data) {
+        setApiRecommendations(data.data)
+        }
+      })
+    }
   const [holdings, setHoldings] = useState(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY)
@@ -163,8 +175,10 @@ function App() {
   })
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(holdings))
-  }, [holdings])
+  fetch('http://127.0.0.1:8000/api/market/status')
+    .then((res) => res.json())
+    .then((data) => setMarketStatus(data))
+}, [])
 
   const filteredRecommendations = useMemo(() => {
     const text = keyword.trim().toLowerCase()
@@ -358,14 +372,19 @@ function App() {
           <p>整合近期走勢、熱門題材、個人庫存與買賣點建議</p>
         </div>
 
+        {marketStatus && (
+          <div style={{ fontSize: "14px", color: "#64748b", marginTop: "6px" }}>
+            📊 市場狀態：{marketStatus.status} ｜ 下次更新：{marketStatus.nextUpdateTime}
+          </div>
+        )}
+
         <div className="headerActions">
           <button className="btn secondary" onClick={resetDemoData}>
             <RefreshCw size={16} />
             重置 Demo
           </button>
 
-          <button className="btn">
-            <RefreshCw size={16} />
+          <button className="btn" onClick={fetchRecommendations}>
             更新分析
           </button>
         </div>
@@ -431,17 +450,17 @@ function App() {
             </div>
 
             <div className="recommendList">
-              {filteredRecommendations.map((item) => (
-                <div className="recommendCard" key={item.id}>
+              {(apiRecommendations.length > 0 ? apiRecommendations : recommendations).map((item) => (
+                <div className="recommendCard" key={item.symbol || item.id}>
                   <div className="recommendTop">
                     <div>
                       <h3>
                         {item.name}
-                        <span>{item.id}</span>
+                        <span>{item.symbol || item.id}</span>
                       </h3>
 
                       <div className="tags">
-                        <span>{item.type}</span>
+                        <span>{item.type || '台股'}</span>
                         <span className="signal">{item.signal}</span>
                       </div>
 
@@ -456,14 +475,14 @@ function App() {
 
                   <div className="infoGrid">
                     <Info title="走勢分數" value={`${item.trendScore}/100`} />
-                    <Info title="話題分數" value={`${item.topicScore}/100`} />
+                    <Info title="訊號" value={item.signal || '中性觀察'} />
                     <Info title="建議買進區" value={item.buyZone} />
                     <Info title="建議停利區" value={item.sellZone} />
                   </div>
 
                   <div className="risk">
                     <AlertTriangle size={16} />
-                    {item.risk}
+                    {item.risk || item.reason || '目前無特殊風險提示'}
                   </div>
                 </div>
               ))}
