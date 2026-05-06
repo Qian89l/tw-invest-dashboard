@@ -169,8 +169,11 @@ function App() {
     refreshMarketStatus()
   }, [])
 
-  const fetchRecommendations = () => {
+  const fetchRecommendations = async () => {
     setLoading(true)
+
+    // 先叫醒 API
+    await fetch(`${API_BASE_URL}/api/market/status`)
 
     fetch(`${API_BASE_URL}/api/recommendations`)
       .then((res) => res.json())
