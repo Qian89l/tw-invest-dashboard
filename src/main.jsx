@@ -23,16 +23,16 @@ import {
 import './styles.css'
 
 const STORAGE_KEY = 'tw-invest-dashboard-portfolio'
-//const [marketStatus, setMarketStatus] = useState(null)
+const API_BASE_URL = 'https://tw-invest-api.onrender.com'
 
-const recommendations = [
+const fallbackRecommendations = [
   {
     id: '2330',
+    symbol: '2330',
     name: '台積電',
     type: '台股',
     price: 980,
     trendScore: 92,
-    topicScore: 88,
     signal: '偏多觀察',
     reason: 'AI、先進製程、外資關注度高，短線量能仍強。',
     buyZone: '940 - 960',
@@ -41,11 +41,11 @@ const recommendations = [
   },
   {
     id: '0050',
+    symbol: '0050',
     name: '元大台灣50',
     type: 'ETF',
     price: 185.4,
     trendScore: 82,
-    topicScore: 73,
     signal: '穩健加碼',
     reason: '大盤權值股趨勢仍偏多，適合長期核心配置。',
     buyZone: '178 - 182',
@@ -54,29 +54,16 @@ const recommendations = [
   },
   {
     id: '00878',
+    symbol: '00878',
     name: '國泰永續高股息',
     type: 'ETF',
     price: 22.8,
     trendScore: 68,
-    topicScore: 61,
     signal: '持有觀察',
     reason: '高股息題材穩定，但資金熱度較成長股弱。',
     buyZone: '21.8 - 22.2',
     sellZone: '24.0 - 24.5',
     risk: '配息政策、成分股調整會影響評價。',
-  },
-  {
-    id: '科技基金A',
-    name: '全球AI科技基金',
-    type: '基金',
-    price: 36.2,
-    trendScore: 87,
-    topicScore: 94,
-    signal: '分批布局',
-    reason: 'AI、半導體、雲端題材延續，但波動較高。',
-    buyZone: '34 - 35.5',
-    sellZone: '39 - 41',
-    risk: '美股科技股修正時回檔幅度可能較大。',
   },
 ]
 
@@ -137,25 +124,16 @@ const klineData = [
 ]
 
 function money(value) {
-  return Number(value || 0).toLocaleString('zh-TW', {
-    maximumFractionDigits: 2,
-  })
+  return Math.round(Number(value || 0)).toLocaleString('zh-TW')
 }
 
 function App() {
   const [keyword, setKeyword] = useState('')
-  const [importPreview, setImportPreview] = useState([])
   const [marketStatus, setMarketStatus] = useState(null)
   const [apiRecommendations, setApiRecommendations] = useState([])
-  const fetchRecommendations = () => {
-  fetch("http://127.0.0.1:8000/api/recommendations")
-    .then(res => res.json())
-    .then(data => {
-      if (data.data) {
-        setApiRecommendations(data.data)
-        }
-      })
-    }
+  const [importPreview, setImportPreview] = useState([])
+  const [loading, setLoading] = useState(false)
+
   const [holdings, setHoldings] = useState(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY)
@@ -175,22 +153,89 @@ function App() {
   })
 
   useEffect(() => {
-  fetch('http://127.0.0.1:8000/api/market/status')
-    .then((res) => res.json())
-    .then((data) => setMarketStatus(data))
-}, [])
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(holdings))
+  }, [holdings])
+
+  const refreshMarketStatus = () => {
+    fetch(`${API_BASE_URL}/api/market/status`)
+      .then((res) => res.json())
+      .then((data) => setMarketStatus(data))
+      .catch((error) => {
+        console.error('market status error:', error)
+      })
+  }
+
+  useEffect(() => {
+    refreshMarketStatus()
+  }, [])
+
+  const fetchRecommendations = () => {
+    setLoading(true)
+
+    fetch(`${API_BASE_URL}/api/recommendations`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (Array.isArray(data.data)) {
+          setApiRecommendations(data.data)
+        } else {
+          setApiRecommendations([])
+        }
+
+        if (data.market) {
+          setMarketStatus(data.market)
+        }
+      })
+      .catch((error) => {
+        console.error('recommendations error:', error)
+        alert('更新分析失敗，請確認 Python API 是否有啟動')
+      })
+      .finally(() => {
+        setLoading(false)
+      })
+  }
+
+  useEffect(() => {
+    const autoRefresh = () => {
+      refreshMarketStatus()
+
+      fetch(`${API_BASE_URL}/api/market/status`)
+        .then((res) => res.json())
+        .then((status) => {
+          const phase = status.phase
+
+          if (phase === 'trading' || phase === 'after_market') {
+            fetchRecommendations()
+          }
+        })
+        .catch((error) => {
+          console.error('auto refresh error:', error)
+        })
+    }
+
+    autoRefresh()
+
+    const timer = setInterval(() => {
+      autoRefresh()
+    }, 60000)
+
+    return () => clearInterval(timer)
+  }, [])
+
+  const recommendationSource =
+    apiRecommendations.length > 0 ? apiRecommendations : fallbackRecommendations
 
   const filteredRecommendations = useMemo(() => {
     const text = keyword.trim().toLowerCase()
-    if (!text) return recommendations
+    if (!text) return recommendationSource
 
-    return recommendations.filter(
-      (item) =>
-        item.id.toLowerCase().includes(text) ||
-        item.name.toLowerCase().includes(text) ||
-        item.type.toLowerCase().includes(text)
-    )
-  }, [keyword])
+    return recommendationSource.filter((item) => {
+      const symbol = String(item.symbol || item.id || '').toLowerCase()
+      const name = String(item.name || '').toLowerCase()
+      const type = String(item.type || '台股').toLowerCase()
+
+      return symbol.includes(text) || name.includes(text) || type.includes(text)
+    })
+  }, [keyword, recommendationSource])
 
   const portfolio = useMemo(() => {
     const totalCost = holdings.reduce(
@@ -325,29 +370,40 @@ function App() {
     const reader = new FileReader()
 
     reader.onload = (e) => {
-      const data = new Uint8Array(e.target.result)
-      const workbook = XLSX.read(data, { type: 'array' })
-      const sheet = workbook.Sheets[workbook.SheetNames[0]]
-      const rows = XLSX.utils.sheet_to_json(sheet)
+      try {
+        const data = new Uint8Array(e.target.result)
+        const workbook = XLSX.read(data, { type: 'array' })
+        const sheet = workbook.Sheets[workbook.SheetNames[0]]
+        const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' })
 
-      const mapped = rows
-        .map((row) => ({
-          id: String(row['代號'] || row['Symbol'] || '').trim(),
-          name: String(row['名稱'] || row['Name'] || '').trim(),
-          type: String(row['類型'] || row['Type'] || '台股').trim(),
-          shares: Number(row['數量'] || row['Shares'] || 0),
-          avgCost: Number(row['平均成本'] || row['AvgCost'] || 0),
-          currentPrice: Number(
-            row['目前價格'] ||
-              row['現價'] ||
-              row['CurrentPrice'] ||
-              0
-          ),
-          weight: Number(row['權重'] || row['Weight'] || 0),
-        }))
-        .filter((row) => row.id && row.name && row.shares > 0 && row.avgCost > 0)
+        console.log('Excel 原始資料：', rows)
 
-      setImportPreview(mapped)
+        const mapped = rows
+          .map((row) => ({
+            id: String(row['代號'] || row['Symbol'] || row['股票代號'] || '').trim(),
+            name: String(row['名稱'] || row['Name'] || row['股票名稱'] || '').trim(),
+            type: String(row['類型'] || row['Type'] || '台股').trim(),
+            shares: Number(row['數量'] || row['Shares'] || row['股數'] || 0),
+            avgCost: Number(row['平均成本'] || row['AvgCost'] || row['成本'] || 0),
+            currentPrice: Number(
+              row['目前價格'] || row['現價'] || row['CurrentPrice'] || row['市價'] || 0
+            ),
+            //weight: Number(row['權重'] || row['Weight'] || 0),
+          }))
+          .filter((row) => row.id && row.name && row.shares > 0 && row.avgCost > 0)
+
+        console.log('轉換後資料：', mapped)
+
+        if (mapped.length === 0) {
+          alert('匯入失敗：請確認 Excel 第一列欄位名稱是否為：代號、名稱、類型、數量、平均成本、目前價格')
+          return
+        }
+
+        setImportPreview(mapped)
+      } catch (error) {
+        console.error('Excel 匯入錯誤：', error)
+        alert('Excel 匯入失敗，請確認檔案格式是否正確')
+      }
     }
 
     reader.readAsArrayBuffer(file)
@@ -355,7 +411,8 @@ function App() {
   }
 
   const confirmImport = () => {
-    setHoldings((prev) => [...prev, ...importPreview])
+    setHoldings(importPreview)
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(importPreview))
     setImportPreview([])
   }
 
@@ -370,13 +427,14 @@ function App() {
         <div>
           <h1>台股・基金策略分析平台</h1>
           <p>整合近期走勢、熱門題材、個人庫存與買賣點建議</p>
-        </div>
 
-        {marketStatus && (
-          <div style={{ fontSize: "14px", color: "#64748b", marginTop: "6px" }}>
-            📊 市場狀態：{marketStatus.status} ｜ 下次更新：{marketStatus.nextUpdateTime}
-          </div>
-        )}
+          {marketStatus && (
+            <div className="marketStatus">
+              📊 市場狀態：{marketStatus.status} ｜ 下次更新：
+              {marketStatus.nextUpdateTime}
+            </div>
+          )}
+        </div>
 
         <div className="headerActions">
           <button className="btn secondary" onClick={resetDemoData}>
@@ -384,8 +442,9 @@ function App() {
             重置 Demo
           </button>
 
-          <button className="btn" onClick={fetchRecommendations}>
-            更新分析
+          <button className="btn" onClick={fetchRecommendations} disabled={loading}>
+            <RefreshCw size={16} />
+            {loading ? '更新中...' : '更新分析'}
           </button>
         </div>
       </header>
@@ -416,7 +475,7 @@ function App() {
           <Metric
             icon={<Target />}
             title="推薦候選"
-            value={`${recommendations.length} 檔`}
+            value={`${recommendationSource.length} 檔`}
             note="依趨勢與話題分數排序"
           />
 
@@ -424,7 +483,13 @@ function App() {
             icon={<CheckCircle2 />}
             title="庫存健康度"
             value={`${healthScore} 分`}
-            note={healthScore >= 80 ? '配置健康' : healthScore >= 60 ? '可再優化' : '風險偏高'}
+            note={
+              healthScore >= 80
+                ? '配置健康'
+                : healthScore >= 60
+                ? '可再優化'
+                : '風險偏高'
+            }
           />
         </section>
 
@@ -450,42 +515,50 @@ function App() {
             </div>
 
             <div className="recommendList">
-              {(apiRecommendations.length > 0 ? apiRecommendations : recommendations).map((item) => (
-                <div className="recommendCard" key={item.symbol || item.id}>
-                  <div className="recommendTop">
-                    <div>
-                      <h3>
-                        {item.name}
-                        <span>{item.symbol || item.id}</span>
-                      </h3>
+              {filteredRecommendations.map((item) => {
+                const symbol = item.symbol || item.id
+                return (
+                  <div className="recommendCard" key={symbol}>
+                    <div className="recommendTop">
+                      <div>
+                        <h3>
+                          {item.name}
+                          <span>{symbol}</span>
+                        </h3>
 
-                      <div className="tags">
-                        <span>{item.type || '台股'}</span>
-                        <span className="signal">{item.signal}</span>
+                        <div className="tags">
+                          <span>{item.type || '台股'}</span>
+                          <span className="signal">
+                            {item.signal || '中性觀察'}
+                          </span>
+                        </div>
+
+                        <p>{item.reason || '目前趨勢尚未明確'}</p>
                       </div>
 
-                      <p>{item.reason}</p>
+                      <div className="priceBox">
+                        <small>目前價格</small>
+                        <b>{item.price ?? '--'}</b>
+                      </div>
                     </div>
 
-                    <div className="priceBox">
-                      <small>目前價格</small>
-                      <b>{item.price}</b>
+                    <div className="infoGrid">
+                      <Info
+                        title="走勢分數"
+                        value={`${item.trendScore ?? '--'}/100`}
+                      />
+                      <Info title="訊號" value={item.signal || '中性觀察'} />
+                      <Info title="建議買進區" value={item.buyZone || '--'} />
+                      <Info title="建議停利區" value={item.sellZone || '--'} />
+                    </div>
+
+                    <div className="risk">
+                      <AlertTriangle size={16} />
+                      {item.risk || item.reason || '目前無特殊風險提示'}
                     </div>
                   </div>
-
-                  <div className="infoGrid">
-                    <Info title="走勢分數" value={`${item.trendScore}/100`} />
-                    <Info title="訊號" value={item.signal || '中性觀察'} />
-                    <Info title="建議買進區" value={item.buyZone} />
-                    <Info title="建議停利區" value={item.sellZone} />
-                  </div>
-
-                  <div className="risk">
-                    <AlertTriangle size={16} />
-                    {item.risk || item.reason || '目前無特殊風險提示'}
-                  </div>
-                </div>
-              ))}
+                )
+              })}
             </div>
           </div>
 
